@@ -1,0 +1,184 @@
+#!/bin/bash
+# Check and restart a sshuttle tunnel from a host (which only has access to a local network) to this host,
+#  routing traffic destined for a given remote network back through the tunnel
+#  It is not necessary for the local-only host to be able to initiate connections to the host with access to the remote network
+# This is intended to be executed from a local cron job as a non-privileged user
+
+# Instructions:
+# Context:
+#   - Host A is the host that has access to both remote and local networks
+#   - Host B is the host which only has access to the local network, which you want to give access to the remote network
+# 1. Copy this script to Host A.
+# 2. Install and configure sshuttle on Host B.
+# 3. Install 'nc' binary on both Host A and Host B. (netcat-openbsd on Ubuntu).
+# 4. Install and configure sshd on Host A and Host B.
+# 5. Configure SSH keys / passwordless login from Host A to Host B. It is not necessary for Host B to be able to initiate connections to Host A.
+# 6. Add the Host B user's SSH public key to the ~/.ssh/authorized_keys file of the Host A user.
+# 7. Test SSH passwordless login from Host A to Host B and back through the reverse tunnel.
+#      Example: This command should give the hostname of Host A
+#       ssh -R $SSHUTTLE_PORT:localhost:22 HOST_B_USER@HOST_B_IP ssh HOST_A_USER@localhost hostname
+# 8. Identify a host and port that can be contacted on the remote network to contact to test the connection.
+# 9. Execute this script: check-tunnel HOST_B_USER@HOST_B_IP REMOTE_NETWORK CHECK_HOST:CHECK_PORT
+# 10. Optionally, Update the config variables below
+#
+# If everything worked, you can now access the remote network from HOST B
+
+
+#### Config
+
+# Port to use on the client to forward traffic to
+SSHUTTLE_PORT=2222
+# BIN on client to find sshuttle. Leave without a path to just use what's in PATH
+SSHUTTLE_PATH=sshuttle
+# Additional args to pass to sshuttle. See sshuttle man page for more information
+EXTRA_SSHUTTLE_ARGS="--dns"
+# Used for waiting in various places in the script.
+WAIT=3
+
+# This script name
+SCRIPT=$(basename $0)
+# SSH Args to use for contacting the client, ensuring we are using ssh keys and other stuff
+SSH_ARGS="-o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=2 -o ConnectTimeout=5 -o Compression=yes"
+# Binaries that need to be found on this client. (You can set any to a full path, if not in PATH)
+LOCAL_BINS="nc sshd"
+# Binaries that need to be found on the remote server. (You can set to any to a full path, if not in PATH)
+REMOTE_BINS="nc $SSHUTTLE_PATH bash hostname"
+
+# Set to 'yes' or 'no' to log to the LOG file
+LOG_MESSAGES=no
+# Where to create script logs, if logging
+LOG=$HOME/logs/$(basename $0).log
+
+
+#### Functions
+
+# Die with an error message
+die() {
+    log "$@" >&2
+    exit 1
+}
+# Log a given message (if we're logging) and echo to the console
+log() {
+    msg="$(date +%Y%h%m-%H%M%S) $SCRIPT - $@"
+    [[ -e $LOG && $LOG_MESSAGES =~ [Y|y][E|e][S|s] ]] \
+        && echo "$msg" >> $LOG
+    echo "$msg"
+}
+# Evaluate a command, giving some information and feedback on the exit code
+eval_cmd() {
+    log "Executing $@"
+    eval "$@"
+    exit_code=${PIPESTATUS[0]}
+    log "Exit code: $exit_code"
+    return $exit_code
+}
+# Test SSH (including passwordless login) to the REMOTE_HOST
+test_ssh_to_client() {
+    # Testing connection to port 22 on the REMOTE_HOST
+    eval_cmd timeout $WAIT nc -z $REMOTE_HOST 22 &>/dev/null \
+        || return 1
+    # Testing execution of a command over ssh on REMOTE_HOST
+    eval_cmd timeout $WAIT ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST hostname &>/dev/null \
+        || return 1
+}
+# Check the tunnel from the server to the client's network, contacting the CHECK_HOST on the port CHECK_PORT
+check_tunnel() {
+    eval_cmd timeout $WAIT ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST timeout $WAIT nc -vz $CHECK_HOST $CHECK_PORT
+}
+
+stop_tunnel() {
+    # Kill the local sshuttle sshd, if running
+    if pgrep -f "sshd.*$LOCAL_USER@notty" &>/dev/null; then
+        log "sshuttle already running. Stopping"
+        eval_cmd pkill -f "sshd.*$LOCAL_USER@notty"
+    fi
+
+    # Kill the local ssh port forward connection, if running
+    if pgrep -f "ssh.*$LOCAL_USER@localhost:$SSHUTTLE_PORT" &>/dev/null; then
+        log "sshuttle already running. Stopping"
+        eval_cmd pkill -f "ssh.*$LOCAL_USER@localhost:$SSHUTTLE_PORT"
+    fi
+
+    # Killing existing tunnel processes on the REMOTE_HOST
+    ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST <<HERE
+pkill -f "ssh.*-p.*$SSHUTTLE_PORT"
+pkill -f "sshuttle.*$SSHUTTLE_PORT"
+HERE
+}
+
+start_tunnel() {
+    # Create tunnel
+    timeout $WAIT ssh $SSH_ARGS -f -R $SSHUTTLE_PORT:localhost:22 \
+        $REMOTE_USER@$REMOTE_HOST $SSHUTTLE_PATH $EXTRA_SSHUTTLE_ARGS -r $LOCAL_USER@localhost:$SSHUTTLE_PORT $NETWORK
+}
+
+restart_tunnel() {
+    stop_tunnel && start_tunnel \
+        || die "Could not restart the tunnel"
+}
+
+
+#### Main
+
+ARG=$1
+NETWORK=$2
+CHECK=$3
+
+LOCAL_USER=$(id -un)
+if [[ $ARG == *@* ]]; then
+    REMOTE_USER=$(echo "$ARG" | cut -f1 -d@)
+    REMOTE_HOST=$(echo "$ARG" | cut -f2 -d@)
+else
+    REMOTE_HOST="$ARG"
+    REMOTE_USER=$LOCAL_USER
+fi
+
+[[ $REMOTE_HOST && $NETWORK ]] \
+    || { echo "Usage: $0 [REMOTE_USER@]REMOTE_HOST_IP NETWORK CHECK_HOST:CHECK_PORT"; exit 1; }
+
+REMOTE_USER=${REMOTE_USER:-$LOCAL_USER}
+
+if [[ $CHECK ]]; then
+    CHECK_HOST=$(echo $CHECK | cut -s -f1 -d:)
+    CHECK_PORT=$(echo $CHECK | cut -s -f2 -d:)
+
+    [[ $CHECK_HOST && $CHECK_PORT && $CHECK_PORT -gt 0 ]] \
+        || die "Invalid CHECK_HOST:CHECK_PORT"
+fi
+
+# Initialize Log
+[[ -e $(dirname $LOG) ]] \
+    || mkdir -p $(dirname $LOG)
+[[ $LOG_MESSAGES =~ [Y|y][E|e][S|s] ]] && touch $LOG
+
+# Cron doesn't give us all the bin dirs in the PATH
+PATH=$PATH:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Check prerequisites
+for bin in $LOCAL_BINS; do
+    which $bin &>/dev/null \
+        || die "Missing on local server: $bin"
+done
+test_ssh_to_client \
+    || die "SSH failed to $REMOTE_USER@$REMOTE_HOST. Quitting"
+
+for bin in $REMOTE_BINS; do
+    ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST which $bin &>/dev/null \
+        || die "Missing on remote client: $bin"
+done
+
+# Check the tunnel, and restart if not up
+if check_tunnel; then
+    log "Tunnel is up"
+else
+    log "Tunnel is down, restarting."
+    restart_tunnel \
+        || die "Could not restart the tunnel"
+    sleep $WAIT
+    if check_tunnel; then
+        log "Tunnel is now up"
+    else
+        log "Tunnel is still not up after attempting to restart"
+        exit 1
+    fi
+fi
