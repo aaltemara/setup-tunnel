@@ -1,9 +1,11 @@
  Check and restart a sshuttle tunnel from a host (which only has access to a local network) to this host,
-  routing traffic destined for a given remote network back through the tunnel
+  routing traffic destined for a given remote network back through the tunnel.
+
   It is not necessary for the local-only host to be able to initiate connections to the host with access to the remote network
  This is intended to be executed from a local cron job as a non-privileged user
 
  Instructions:
+
  Context:
    - Host A is the host that has access to both remote and local networks
    - Host B is the host which only has access to the local network, which you want to give access to the remote network
