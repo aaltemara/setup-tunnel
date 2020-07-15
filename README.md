@@ -32,8 +32,8 @@ Usage: check-tunnel [REMOTE_USER@]REMOTE_HOST_IP NETWORK CHECK_HOST:CHECK_PORT
 
 ## Example:
 
-### Situation:
 You have a desktop (192.168.0.10) which is on a home network 192.168.0.0/24, and you have a laptop which has access to both the home network and a remote network 10.0.0.0/8. The laptop can iinitiate connects to the desktop, though not the reverse. Your username on the desktop is john. Your username on the laptop is jsmith. The local DNS domain name on the remote network is rnet.com
+
 1. Install and configure sshuttle, ssh server, netcat on the desktop.
 2. Install ssh server, netcat and this script on the laptop.
 3. Ensure SSH passwordless login works from jsmith on the laptop to the john user on the desktop, and the desktop user (john's) public ssh key is added to the authorized_keys of the user on the laptop (jsmith).
