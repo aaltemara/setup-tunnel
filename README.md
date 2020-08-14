@@ -13,7 +13,7 @@ It is not necessary for the local-only host to be able to initiate connections t
 ## Instructions:
 1. Copy this script to Host A.
 2. Install and configure sshuttle on Host B.
-3. Install 'nc' binary on both Host A and Host B. (netcat-openbsd on Ubuntu).
+3. Install 'nc' and 'curl' binaries on both Host A and Host B. (netcat-openbsd and curl on Ubuntu).
 4. Install and configure sshd on Host A and Host B.
 5. Configure SSH keys / passwordless login from Host A to Host B. It is not necessary for Host B to be able to initiate connections to Host A.
 6. Add the Host B user's SSH public key to the ~/.ssh/authorized_keys file of the Host A user.
@@ -21,14 +21,14 @@ It is not necessary for the local-only host to be able to initiate connections t
 8. Test SSH passwordless login from Host A to Host B and back through the reverse tunnel.
       Example: This command should give the hostname of Host A
        ssh -R $SSHUTTLE_PORT:localhost:22 HOST_B_USER@HOST_B_IP ssh HOST_A_USER@localhost hostname
-9. Identify a host and port that can be contacted on the remote network to contact to test the connection.
-10. Execute this script: check-tunnel HOST_B_USER@HOST_B_IP REMOTE_NETWORK CHECK_HOST:CHECK_PORT
+9. Identify a web url that can be contacted on the remote network to test the connection.
+10. Execute this script: check-tunnel HOST_B_USER@HOST_B_IP REMOTE_NETWORK CHECK_URL
 11. Optionally, Update the config variables below
 
  If everything worked, you can now access the remote network from HOST B
 
 
-Usage: check-tunnel [REMOTE_USER@]REMOTE_HOST_IP NETWORK CHECK_HOST:CHECK_PORT
+Usage: check-tunnel [REMOTE_USER@]REMOTE_HOST_IP NETWORK CHECK_URL
 
 
 ## Example:
@@ -38,7 +38,7 @@ You have a desktop (192.168.0.10) which is on a home network 192.168.0.0/24, and
 1. Install and configure sshuttle, ssh server, netcat on the desktop.
 2. Install ssh server, netcat and this script on the laptop.
 3. Ensure SSH passwordless login works from jsmith on the laptop to the john user on the desktop, and the desktop user (john's) public ssh key is added to the authorized_keys of the user on the laptop (jsmith).
-4. Identify a known host 10.1.2.3 on the 10.0.0.0/8 network to be the 'check host:port'
+4. Identify a known WWW host www.privateweb.net on the 10.0.0.0/8 network to be the 'check_url'
 5. Add rnet.com to the 'search' line on /etc/resolv.conf, or other methods for the specific OS.
 6. Execute (as jsmith on the laptop): check-tunnel john@192.168.0.10 10.0.0.0/8 10.1.2.3:80
 

@@ -1,6 +1,28 @@
 #!/bin/bash
 # Check and restart a sshuttle tunnel from a host (which only has access to a local network) to this host,
 #  routing traffic destined for a given remote network back through the tunnel
+#  It is not necessary for the local-only host to be able to initiate connections to the host with access to the remote network
+# This is intended to be executed from a local cron job as a non-privileged user
+
+# Instructions:
+# Context:
+#   - Host A is the host that has access to both remote and local networks
+#   - Host B is the host which only has access to the local network, which you want to give access to the remote network
+# 1. Copy this script to Host A.
+# 2. Install and configure sshuttle on Host B.
+# 3. Install 'nc' and 'curl' binaries on both Host A and Host B. (netcat-openbsd and curl on Ubuntu).
+# 4. Install and configure sshd on Host A and Host B.
+# 5. Configure SSH keys / passwordless login from Host A to Host B. It is not necessary for Host B to be able to initiate connections to Host A.
+# 6. Add the Host B user's SSH public key to the ~/.ssh/authorized_keys file of the Host A user.
+# 7. Test SSH passwordless login from Host A to Host B and back through the reverse tunnel.
+#      Example: This command should give the hostname of Host A
+#       ssh -R $SSHUTTLE_PORT:localhost:22 HOST_B_USER@HOST_B_IP ssh HOST_A_USER@localhost hostname
+# 8. Identify a host and port that can be contacted on the remote network to contact to test the connection.
+# 9. Execute this script: check-tunnel HOST_B_USER@HOST_B_IP REMOTE_NETWORK CHECK_URL
+# 10. Optionally, Update the config variables below
+#
+# If everything worked, you can now access the remote network from HOST B
+
 
 #### Config
 
@@ -11,7 +33,7 @@ SSHUTTLE_PATH=sshuttle
 # Additional args to pass to sshuttle. See sshuttle man page for more information
 EXTRA_SSHUTTLE_ARGS="--dns"
 # Used for waiting in various places in the script.
-WAIT=3
+WAIT=10
 
 # This script name
 SCRIPT=$(basename $0)
@@ -20,10 +42,10 @@ SSH_ARGS="-o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=2 -o
 # Binaries that need to be found on this client. (You can set any to a full path, if not in PATH)
 LOCAL_BINS="nc sshd"
 # Binaries that need to be found on the remote server. (You can set to any to a full path, if not in PATH)
-REMOTE_BINS="nc $SSHUTTLE_PATH bash hostname"
+REMOTE_BINS="curl nc $SSHUTTLE_PATH bash hostname"
 
 # Set to 'yes' or 'no' to log to the LOG file
-LOG_MESSAGES=no
+LOG_MESSAGES=yes
 # Where to create script logs, if logging
 LOG=$HOME/logs/$(basename $0).log
 
@@ -59,9 +81,9 @@ test_ssh_to_client() {
     eval_cmd timeout $WAIT ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST hostname &>/dev/null \
         || return 1
 }
-# Check the tunnel from the server to the client's network, contacting the CHECK_HOST on the port CHECK_PORT
+# Check the tunnel from the server to the client's network, connecting to the CHECK_URL
 check_tunnel() {
-    eval_cmd timeout $WAIT ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST timeout $WAIT nc -vz $CHECK_HOST $CHECK_PORT
+    eval_cmd timeout $WAIT ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST timeout $WAIT curl -s -o /dev/null $CHECK_URL
 }
 
 stop_tunnel() {
@@ -100,7 +122,7 @@ restart_tunnel() {
 
 ARG=$1
 NETWORK=$2
-CHECK=$3
+CHECK_URL=$3
 
 LOCAL_USER=$(id -un)
 if [[ $ARG == *@* ]]; then
@@ -111,18 +133,10 @@ else
     REMOTE_USER=$LOCAL_USER
 fi
 
-[[ $REMOTE_HOST && $NETWORK ]] \
-    || { echo "Usage: $0 [REMOTE_USER@]REMOTE_HOST_IP NETWORK CHECK_HOST:CHECK_PORT"; exit 1; }
+[[ $REMOTE_HOST && $NETWORK && $CHECK_URL ]] \
+    || { echo "Usage: $0 [REMOTE_USER@]REMOTE_HOST_IP NETWORK CHECK_URL"; exit 1; }
 
 REMOTE_USER=${REMOTE_USER:-$LOCAL_USER}
-
-if [[ $CHECK ]]; then
-    CHECK_HOST=$(echo $CHECK | cut -s -f1 -d:)
-    CHECK_PORT=$(echo $CHECK | cut -s -f2 -d:)
-
-    [[ $CHECK_HOST && $CHECK_PORT && $CHECK_PORT -gt 0 ]] \
-        || die "Invalid CHECK_HOST:CHECK_PORT"
-fi
 
 # Initialize Log
 [[ -e $(dirname $LOG) ]] \
