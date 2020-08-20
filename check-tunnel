@@ -40,9 +40,9 @@ SCRIPT=$(basename $0)
 # SSH Args to use for contacting the client, ensuring we are using ssh keys and other stuff
 SSH_ARGS="-o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=2 -o ConnectTimeout=5 -o Compression=yes"
 # Binaries that need to be found on this client. (You can set any to a full path, if not in PATH)
-LOCAL_BINS="nc sshd"
+LOCAL_BINS="curl nc sshd"
 # Binaries that need to be found on the remote server. (You can set to any to a full path, if not in PATH)
-REMOTE_BINS="curl nc $SSHUTTLE_PATH bash hostname"
+REMOTE_BINS="curl $SSHUTTLE_PATH bash hostname"
 
 # Set to 'yes' or 'no' to log to the LOG file
 LOG_MESSAGES=yes
@@ -73,7 +73,7 @@ eval_cmd() {
     return $exit_code
 }
 # Test SSH (including passwordless login) to the REMOTE_HOST
-test_ssh_to_client() {
+test_ssh_to_remote() {
     # Testing connection to port 22 on the REMOTE_HOST
     eval_cmd timeout $WAIT nc -z $REMOTE_HOST 22 &>/dev/null \
         || return 1
@@ -81,9 +81,13 @@ test_ssh_to_client() {
     eval_cmd timeout $WAIT ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST hostname &>/dev/null \
         || return 1
 }
-# Check the tunnel from the server to the client's network, connecting to the CHECK_URL
-check_tunnel() {
+# Check the tunnel by connecting to the CHECK_URL from the remote host
+connect_to_check_url_from_remote() {
     eval_cmd timeout $WAIT ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST timeout $WAIT curl -s -o /dev/null $CHECK_URL
+}
+# Connect to CHECK_URL from the local host
+connect_to_check_url_from_local() {
+    eval_cmd timeout $WAIT curl -s -o /dev/null $CHECK_URL
 }
 
 stop_tunnel() {
@@ -120,19 +124,21 @@ restart_tunnel() {
 
 #### Main
 
-ARG=$1
+REMOTE_HOST_ARG=$1
 NETWORK=$2
 CHECK_URL=$3
 
+# Set the remote user from remote host string given, or the local user if not given
 LOCAL_USER=$(id -un)
-if [[ $ARG == *@* ]]; then
-    REMOTE_USER=$(echo "$ARG" | cut -f1 -d@)
-    REMOTE_HOST=$(echo "$ARG" | cut -f2 -d@)
+if [[ $REMOTE_HOST_ARG == *@* ]]; then
+    REMOTE_USER=$(echo "$REMOTE_HOST_ARG" | cut -f1 -d@)
+    REMOTE_HOST=$(echo "$REMOTE_HOST_ARG" | cut -f2 -d@)
 else
-    REMOTE_HOST="$ARG"
+    REMOTE_HOST="$REMOTE_HOST_ARG"
     REMOTE_USER=$LOCAL_USER
 fi
 
+# Ensure we have our required arguments
 [[ $REMOTE_HOST && $NETWORK && $CHECK_URL ]] \
     || { echo "Usage: $0 [REMOTE_USER@]REMOTE_HOST_IP NETWORK CHECK_URL"; exit 1; }
 
@@ -146,28 +152,35 @@ REMOTE_USER=${REMOTE_USER:-$LOCAL_USER}
 # Cron doesn't give us all the bin dirs in the PATH
 PATH=$PATH:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Check prerequisites
+# Check for local required binaries
 for bin in $LOCAL_BINS; do
     which $bin &>/dev/null \
         || die "Missing on local server: $bin"
 done
-test_ssh_to_client \
+# Ensure we can SSH to our remote host
+test_ssh_to_remote \
     || die "SSH failed to $REMOTE_USER@$REMOTE_HOST. Quitting"
-
+# Ensure the remote host has the required binaries
 for bin in $REMOTE_BINS; do
     ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST which $bin &>/dev/null \
         || die "Missing on remote client: $bin"
 done
+# Ensure we can reach our CHECK_URL from the local host
+if connect_to_check_url_from_local; then
+    log "Connect to CHECK_URL: $CHECK_URL from local was successful."
+else
+    die "Connect to CHECK_URL: $CHECK_URL from local failed. Not trying to set up the tunnel"
+fi
 
 # Check the tunnel, and restart if not up
-if check_tunnel; then
+if connect_to_check_url_from_remote; then
     log "Tunnel is up"
 else
     log "Tunnel is down, restarting."
     restart_tunnel \
         || die "Could not restart the tunnel"
     sleep $WAIT
-    if check_tunnel; then
+    if connect_to_check_url_from_remote; then
         log "Tunnel is now up"
     else
         log "Tunnel is still not up after attempting to restart"
