@@ -45,7 +45,7 @@ LOCAL_BINS="curl nc sshd"
 REMOTE_BINS="curl $SSHUTTLE_PATH bash hostname"
 
 # Set to 'yes' or 'no' to log to the LOG file
-LOG_MESSAGES=yes
+LOG_MESSAGES=no
 # Where to create script logs, if logging
 LOG=$HOME/logs/$(basename $0).log
 
@@ -91,6 +91,7 @@ connect_to_check_url_from_local() {
 }
 
 stop_tunnel() {
+    log "Stopping Tunnel"
     # Kill the local sshuttle sshd, if running
     if pgrep -f "sshd.*$LOCAL_USER@notty" &>/dev/null; then
         log "sshuttle already running. Stopping"
@@ -108,9 +109,11 @@ stop_tunnel() {
 pkill -f "ssh.*-p.*$SSHUTTLE_PORT"
 pkill -f "sshuttle.*$SSHUTTLE_PORT"
 HERE
+    return 0
 }
 
 start_tunnel() {
+    log "Starting Tunnel"
     # Create tunnel
     timeout $WAIT ssh $SSH_ARGS -f -R $SSHUTTLE_PORT:localhost:22 \
         $REMOTE_USER@$REMOTE_HOST $SSHUTTLE_PATH $EXTRA_SSHUTTLE_ARGS -r $LOCAL_USER@localhost:$SSHUTTLE_PORT $NETWORK
@@ -138,6 +141,7 @@ else
     REMOTE_USER=$LOCAL_USER
 fi
 
+
 # Ensure we have our required arguments
 [[ $REMOTE_HOST && $NETWORK && $CHECK_URL ]] \
     || { echo "Usage: $0 [REMOTE_USER@]REMOTE_HOST_IP NETWORK CHECK_URL"; exit 1; }
@@ -157,12 +161,19 @@ for bin in $LOCAL_BINS; do
     which $bin &>/dev/null \
         || die "Missing on local server: $bin"
 done
+
+# If tunnel is up, quit
+if connect_to_check_url_from_remote; then
+    log "Tunnel is up"
+    exit 0
+fi
+
 # Ensure we can SSH to our remote host
 test_ssh_to_remote \
     || die "SSH failed to $REMOTE_USER@$REMOTE_HOST. Quitting"
 # Ensure the remote host has the required binaries
 for bin in $REMOTE_BINS; do
-    ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST which $bin &>/dev/null \
+    eval_cmd ssh $SSH_ARGS $REMOTE_USER@$REMOTE_HOST which $bin \
         || die "Missing on remote client: $bin"
 done
 # Ensure we can reach our CHECK_URL from the local host
